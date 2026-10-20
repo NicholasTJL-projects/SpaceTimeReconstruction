@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Space + Time Reconstruction</title>
+  <meta name="description" content="Turn any video into a 4D space + time point cloud: the still scene reconstructed once, every moving subject stacked along its path, viewed from an orbiting camera." />
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <aside id="panel">
+      <header>
+        <h1>Space + Time</h1>
+        <p class="sub">Reconstruct a video in 4D: the still scene once, every moment of the moving subject at once.</p>
+      </header>
+
+      <section class="step">
+        <h2><span class="n">1</span> Video</h2>
+        <label class="drop" id="drop">
+          <input type="file" id="file" accept="video/*" hidden />
+          <span id="dropText">Drop a video here or click to choose</span>
+        </label>
+        <div class="row">
+          <button id="demoBtn" class="ghost">Use a synthetic demo clip</button>
+        </div>
+        <p class="hint">Best results: a fixed camera (tripod, trail cam, CCTV) and one or a few subjects moving across the scene.</p>
+      </section>
+
+      <section class="step">
+        <h2><span class="n">2</span> Settings</h2>
+        <div class="grid">
+          <label>Frames to sample
+            <input type="number" id="frameCount" min="8" max="400" value="72" />
+          </label>
+          <label>Working width (px)
+            <select id="workWidth">
+              <option value="240">240</option>
+              <option value="320" selected>320</option>
+              <option value="400">400</option>
+              <option value="480">480</option>
+            </select>
+          </label>
+          <label>Depth source
+            <select id="depthMode">
+              <option value="ai">AI depth (Depth Anything V2, in browser)</option>
+              <option value="ground">Ground plane heuristic (no download)</option>
+            </select>
+          </label>
+          <label>Subject depth
+            <select id="subjectDepth">
+              <option value="contact">Ground contact (fast)</option>
+              <option value="perframe">Per-frame AI depth (slow)</option>
+            </select>
+          </label>
+          <label>Motion threshold <output id="motionThrOut">28</output>
+            <input type="range" id="motionThr" min="8" max="90" value="28" />
+          </label>
+          <label>Min blob size (px) <output id="minBlobOut">40</output>
+            <input type="range" id="minBlob" min="5" max="400" value="40" />
+          </label>
+          <label>Camera FOV (°) <output id="fovOut">62</output>
+            <input type="range" id="fov" min="30" max="110" value="62" />
+          </label>
+          <label>Depth range (far) <output id="farOut">12</output>
+            <input type="range" id="far" min="3" max="40" step="1" value="12" />
+          </label>
+          <label>Horizon (ground mode) <output id="horizonOut">0.40</output>
+            <input type="range" id="horizon" min="0.05" max="0.9" step="0.01" value="0.40" />
+          </label>
+        </div>
+      </section>
+
+      <section class="step">
+        <h2><span class="n">3</span> Reconstruct</h2>
+        <button id="runBtn" class="primary" disabled>Reconstruct in 4D</button>
+        <div class="progress"><div id="bar"></div></div>
+        <p id="status" class="status">Load a video to begin.</p>
+      </section>
+
+      <section class="step">
+        <h2><span class="n">4</span> View &amp; export</h2>
+        <div class="grid">
+          <label>Reveal
+            <select id="reveal">
+              <option value="grow">Grow with time</option>
+              <option value="all">All moments at once</option>
+            </select>
+          </label>
+          <label>Trail length <output id="trailOut">all</output>
+            <input type="range" id="trail" min="0.02" max="1" step="0.01" value="1" />
+          </label>
+          <label>Subject point size <output id="subjSizeOut">2.2</output>
+            <input type="range" id="subjSize" min="0.5" max="8" step="0.1" value="2.2" />
+          </label>
+          <label>Scene point size <output id="bgSizeOut">2.4</output>
+            <input type="range" id="bgSize" min="0.3" max="8" step="0.1" value="2.4" />
+          </label>
+          <label>Scene brightness <output id="bgDimOut">0.55</output>
+            <input type="range" id="bgDim" min="0" max="1.2" step="0.01" value="0.55" />
+          </label>
+          <label>Time extrusion <output id="extrudeOut">0</output>
+            <input type="range" id="extrude" min="-10" max="10" step="0.1" value="0" />
+          </label>
+          <label>Playback (frames/s) <output id="fpsOut">12</output>
+            <input type="range" id="fps" min="2" max="40" value="12" />
+          </label>
+          <label>Orbit speed <output id="orbitSpeedOut">0.12</output>
+            <input type="range" id="orbitSpeed" min="0" max="0.5" step="0.01" value="0.12" />
+          </label>
+          <label>Aspect
+            <select id="aspect">
+              <option value="fill">Fill window</option>
+              <option value="9/16">9:16 portrait (shorts)</option>
+              <option value="16/9">16:9 landscape</option>
+              <option value="1/1">1:1 square</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="autoOrbit" checked /> Auto orbit</label>
+          <label class="check"><input type="checkbox" id="showFrustum" checked /> Camera frustum</label>
+          <label class="check"><input type="checkbox" id="showCaption" checked /> "space + time" caption</label>
+        </div>
+        <div class="row">
+          <button id="recordBtn" disabled>Record orbit video (.webm)</button>
+          <button id="snapBtn" class="ghost" disabled>Snapshot .png</button>
+        </div>
+        <div class="row">
+          <button id="exportPlyBtn" class="ghost" disabled>Export point cloud (.ply)</button>
+        </div>
+        <p class="hint">Recording captures the viewer at its current size for one full playback. Choose 9:16 for a short-form clip.</p>
+      </section>
+
+      <footer>
+        <p>Everything runs in your browser. Nothing is uploaded. Depth model: <a href="https://huggingface.co/onnx-community/depth-anything-v2-small" target="_blank" rel="noopener">Depth Anything V2 small</a> via Transformers.js.</p>
+      </footer>
+    </aside>
+
+    <main id="stage">
+      <div id="viewerWrap">
+        <canvas id="view"></canvas>
+        <div id="caption">space + time</div>
+        <div id="recDot" hidden>REC</div>
+        <div id="empty">
+          <p>Your 4D scene will appear here.</p>
+        </div>
+      </div>
+      <div id="transport">
+        <button id="playBtn" title="Play / pause">▶</button>
+        <input type="range" id="timeline" min="0" max="0" value="0" step="1" />
+        <span id="frameLabel">0 / 0</span>
+      </div>
+      <details id="debug">
+        <summary>Intermediate images</summary>
+        <div class="thumbs">
+          <figure><canvas id="bgCanvas"></canvas><figcaption>Background (temporal median)</figcaption></figure>
+          <figure><canvas id="depthCanvas"></canvas><figcaption>Depth (bright = near)</figcaption></figure>
+          <figure><canvas id="maskCanvas"></canvas><figcaption>Motion mask (last frame)</figcaption></figure>
+        </div>
+      </details>
+    </main>
+  </div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
