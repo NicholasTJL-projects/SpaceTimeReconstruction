@@ -58,12 +58,18 @@ Or open the GitHub Pages deployment once the `Deploy to GitHub Pages` workflow h
 
 Dependencies load from CDNs through an import map: Three.js 0.170 and Transformers.js 3.3.3. The model comes from the Hugging Face hub.
 
+## Testing
+
+- Click **Use a synthetic demo clip** and reconstruct. The ground-plane mode finishes in about a second; AI depth adds the one-time model download.
+- Upload any fixed-camera clip. The status line reports the decoded size and the effective sampling rate before you run.
+- Headless Chromium builds without proprietary codecs cannot decode H.264. If an .mp4 fails to load there, transcode it to VP9 WebM: `ffmpeg -i in.mp4 -c:v libvpx-vp9 -b:v 2M out.webm`. Chrome, Edge and Safari decode H.264 directly.
+
 ## Converting the recording
 
 The browser saves WebM. For an MP4:
 
 ```bash
-ffmpeg -i scene-spacetime.webm -c:v libx264 -pix_fmt yuv420p -crf 18 scene-spacetime.mp4
+ffmpeg -i scene-spacetime.webm -r 30 -c:v libx264 -pix_fmt yuv420p -crf 18 scene-spacetime.mp4
 ```
 
 ## Limits

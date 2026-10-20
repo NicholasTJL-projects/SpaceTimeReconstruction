@@ -165,7 +165,7 @@ els.recordBtn.addEventListener('click', async () => {
   try {
     const blob = await viewer.recordPlayback();
     download(blob, `${baseName()}.webm`);
-    setStatus(`Saved ${(blob.size / 1048576).toFixed(1)} MB WebM. Convert to MP4 with: ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p out.mp4`);
+    setStatus(`Saved ${(blob.size / 1048576).toFixed(1)} MB WebM. Convert to MP4 with: ffmpeg -i in.webm -r 30 -c:v libx264 -pix_fmt yuv420p out.mp4`);
   } catch (e) {
     setStatus(`Recording failed: ${e.message || e}`);
   } finally {

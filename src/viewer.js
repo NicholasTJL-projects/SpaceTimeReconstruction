@@ -165,7 +165,7 @@ export class Viewer {
     // Camera frustum with the live frame on its image plane
     this.frustum = new THREE.Group();
     const camDist = Math.hypot(...recon.center);
-    const d = Math.min(3, Math.max(NEAR * 0.8, camDist * 0.3));
+    const d = Math.min(3, Math.max(NEAR * 0.5, camDist * 0.35));
     const hw = (recon.width / 2 / recon.focal) * d, hh = (recon.height / 2 / recon.focal) * d;
     const c = [[-hw, hh, -d], [hw, hh, -d], [hw, -hh, -d], [-hw, -hh, -d]];
     const pts = [];
@@ -188,9 +188,10 @@ export class Viewer {
 
     this.center = new THREE.Vector3(...recon.center);
     this.controls.target.copy(this.center);
-    // Orbit far enough out to see the camera frustum and the whole trail.
-    const extent = Math.max(recon.extent || 0, this.center.length());
-    this.orbitRadius = Math.max(4, extent * 2.1);
+    // Orbit far enough out to frame the camera frustum and the whole trail:
+    // roughly the bounding sphere of {camera origin, trail} seen with a 50° lens.
+    const sphere = this.center.length() * 0.5 + (recon.extent || 0);
+    this.orbitRadius = Math.max(2.5, sphere * 2.2);
     this.orbitAngle = 0.35;
     this.time = 0;
     this._currentFrameIdx = -1;
