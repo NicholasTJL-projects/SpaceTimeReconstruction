@@ -165,7 +165,7 @@ export class Viewer {
     // Camera frustum with the live frame on its image plane
     this.frustum = new THREE.Group();
     const camDist = Math.hypot(...recon.center);
-    const d = Math.min(3, Math.max(NEAR * 0.5, camDist * 0.35));
+    const d = Math.min(recon.far * 0.5, Math.max(NEAR * 0.5, camDist * 0.35));
     const hw = (recon.width / 2 / recon.focal) * d, hh = (recon.height / 2 / recon.focal) * d;
     const c = [[-hw, hh, -d], [hw, hh, -d], [hw, -hh, -d], [-hw, -hh, -d]];
     const pts = [];

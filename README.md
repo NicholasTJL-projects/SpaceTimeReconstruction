@@ -25,6 +25,7 @@ Or open the GitHub Pages deployment once the `Deploy to GitHub Pages` workflow h
 | Stage | Method |
 | --- | --- |
 | Frame sampling | N frames spread evenly across the clip, scaled to the working width |
+| Camera stabilization (optional) | Every frame is aligned to the first with a 2D similarity transform (scale, rotation, translation) found by coarse-to-fine inverse-compositional Lucas-Kanade with a Huber weight, then resampled into the first frame's coordinates. Pixels that leave the frame are marked invalid and ignored downstream |
 | Still scene | Per-pixel temporal median of up to 21 frames, which removes anything that moves |
 | Scene depth | Depth Anything V2 small via Transformers.js (WebGPU or WASM), or a ground-plane heuristic that needs no download |
 | Moving subjects | Absolute difference against the median background, threshold, morphological open and dilate, 4-connected components with a minimum area |
@@ -35,7 +36,7 @@ Or open the GitHub Pages deployment once the `Deploy to GitHub Pages` workflow h
 
 ## Good footage
 
-- A camera that does not move: tripod, trail camera, dashcam at rest, CCTV. The reconstruction assumes a fixed viewpoint. A moving camera smears the background and the trail will be wrong.
+- A camera that does not move: tripod, trail camera, dashcam at rest, CCTV. The reconstruction assumes a fixed viewpoint. For handheld or panning shots, enable **Stabilize camera**: it compensates pans, small drifts and zooms, but not a camera that travels through the scene.
 - One or a few subjects that cross the frame rather than loiter in one spot, so the median background does not include them.
 - Even lighting. Auto-exposure jumps and moving shadows register as motion. Raise the motion threshold if the mask is noisy, lower it if the subject is missing.
 
@@ -43,6 +44,7 @@ Or open the GitHub Pages deployment once the `Deploy to GitHub Pages` workflow h
 
 - **Frames to sample**: more frames give a denser trail and a longer reconstruction. 72 is a good start.
 - **Working width**: processing resolution. 320 is fast; 480 gives finer silhouettes.
+- **Stabilize camera**: align all frames to the first before everything else. Use it when the status line reports that most of the frame counts as moving.
 - **Depth source**: AI depth gives real relief in the still scene. The ground-plane heuristic treats everything below the horizon slider as flat ground and everything above it as a distant backdrop, which already works well for lawns, roads and floors.
 - **Time extrusion**: offsets each moment sideways in proportion to its time, for subjects that move little in space.
 - **Reveal**: grow the trail with playback, or show all moments at once.
@@ -75,5 +77,5 @@ ffmpeg -i scene-spacetime.webm -r 30 -c:v libx264 -pix_fmt yuv420p -crf 18 scene
 ## Limits
 
 - Monocular depth is relative, not metric. Scale and perspective are plausible rather than measured.
-- Fixed camera only. Camera motion would need structure-from-motion, which is outside the scope of this in-browser pipeline.
+- Fixed or stabilizable camera only. Stabilization handles pans, tilts, roll and zoom as a 2D similarity; a camera that moves through the scene (parallax) would need structure-from-motion, which is outside the scope of this in-browser pipeline.
 - Subjects are segmented by motion, so anything else that moves (branches, water, shadows) becomes part of the trail.

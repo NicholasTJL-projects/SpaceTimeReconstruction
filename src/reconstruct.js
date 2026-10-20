@@ -9,21 +9,28 @@ const yieldToUI = () => new Promise((r) => requestAnimationFrame(() => r()));
 
 /** Per-pixel temporal median of up to `maxSamples` evenly spaced frames. */
 export function medianBackground(frameSet, maxSamples = 21) {
-  const { width, height, frames, count } = frameSet;
+  const { width, height, frames, count, valid } = frameSet;
   const n = Math.min(maxSamples, count);
   const idx = Array.from({ length: n }, (_, i) => Math.round((i * (count - 1)) / Math.max(1, n - 1)));
   const out = new Uint8ClampedArray(width * height * 4);
+  const bgValid = new Uint8Array(width * height);
   const buf = new Uint8Array(n);
-  const mid = n >> 1;
   for (let p = 0; p < width * height; p++) {
+    let m = 0;
+    for (let k = 0; k < n; k++) if (!valid || valid[idx[k]][p]) m++;
+    // Need a few real samples for a stable median; otherwise the pixel is unknown.
+    if (m < Math.min(3, n)) continue;
+    bgValid[p] = 1;
+    const mid = m >> 1;
     for (let c = 0; c < 3; c++) {
       const o = p * 4 + c;
-      for (let k = 0; k < n; k++) buf[k] = frames[idx[k]][o];
-      out[o] = medianU8(buf, n, mid);
+      let j = 0;
+      for (let k = 0; k < n; k++) if (!valid || valid[idx[k]][p]) buf[j++] = frames[idx[k]][o];
+      out[o] = medianU8(buf, m, mid);
     }
     out[p * 4 + 3] = 255;
   }
-  return out;
+  return { image: out, valid: bgValid };
 }
 
 function medianU8(buf, n, mid) {
@@ -38,10 +45,11 @@ function medianU8(buf, n, mid) {
 }
 
 /** Motion mask: mean abs RGB difference vs background > thr, then open+dilate. */
-export function motionMask(frame, bg, width, height, thr) {
+export function motionMask(frame, bg, width, height, thr, frameValid, bgValid) {
   const n = width * height;
   const raw = new Uint8Array(n);
   for (let p = 0; p < n; p++) {
+    if ((frameValid && !frameValid[p]) || (bgValid && !bgValid[p])) continue;
     const o = p * 4;
     const d = Math.abs(frame[o] - bg[o]) + Math.abs(frame[o + 1] - bg[o + 1]) + Math.abs(frame[o + 2] - bg[o + 2]);
     raw[p] = d > thr * 3 ? 1 : 0;
@@ -108,7 +116,8 @@ export async function reconstruct(frameSet, opts, report) {
 
   report({ phase: 'Estimating still background (temporal median)', frac: 0.02 });
   await yieldToUI();
-  const bg = medianBackground(frameSet);
+  const { image: bg, valid: bgValid } = medianBackground(frameSet);
+  const frameValid = frameSet.valid || null;
 
   // Background depth
   let bgDisp;
@@ -122,30 +131,29 @@ export async function reconstruct(frameSet, opts, report) {
   report({ phase: 'Unprojecting still scene', frac: 0.2 });
   await yieldToUI();
 
-  // Background point cloud
-  const bgPos = new Float32Array(w * h * 3);
-  const bgCol = new Float32Array(w * h * 3);
+  // Background point cloud (only pixels the median could establish)
+  const bgPosArr = [], bgColArr = [];
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const p = y * w + x;
+    if (!bgValid[p]) continue;
     const z = disparityToDepth(bgDisp[p], NEAR, FAR);
-    bgPos[p * 3] = ((x + 0.5 - cx) / focal) * z;
-    bgPos[p * 3 + 1] = (-(y + 0.5 - cy) / focal) * z;
-    bgPos[p * 3 + 2] = -z;
-    bgCol[p * 3] = bg[p * 4] / 255;
-    bgCol[p * 3 + 1] = bg[p * 4 + 1] / 255;
-    bgCol[p * 3 + 2] = bg[p * 4 + 2] / 255;
+    bgPosArr.push(((x + 0.5 - cx) / focal) * z, (-(y + 0.5 - cy) / focal) * z, -z);
+    bgColArr.push(bg[p * 4] / 255, bg[p * 4 + 1] / 255, bg[p * 4 + 2] / 255);
   }
+  const bgPos = Float32Array.from(bgPosArr), bgCol = Float32Array.from(bgColArr);
 
   // Subjects, frame by frame
   const subjPos = [], subjCol = [], subjT = [];
   let lastMask = null;
   const perFrameAI = opts.depthMode === 'ai' && opts.subjectDepth === 'perframe';
   const centroidAcc = [0, 0, 0, 0];
+  let maskPixels = 0;
   for (let i = 0; i < count; i++) {
     const frame = frames[i];
-    const mask = motionMask(frame, bg, w, h, opts.motionThr);
+    const mask = motionMask(frame, bg, w, h, opts.motionThr, frameValid?.[i], bgValid);
     const comps = components(mask, w, h, opts.minBlob);
     lastMask = mask;
+    for (const c of comps) maskPixels += c.pixels.length;
     let frameDisp = null;
     if (perFrameAI && comps.length) frameDisp = await aiDisparity(frame, w, h);
     const t = count > 1 ? i / (count - 1) : 0;
@@ -174,7 +182,8 @@ export async function reconstruct(frameSet, opts, report) {
   const center = nSubj
     ? [centroidAcc[0] / nSubj, centroidAcc[1] / nSubj, centroidAcc[2] / nSubj]
     : sceneCenter(bgPos);
-  const extent = nSubj ? maxDistance(subjPos, center) : maxDistance(bgPos, center);
+  const extent = nSubj ? percentileDistance(subjPos, center, 0.9) : percentileDistance(bgPos, center, 0.9);
+  const maskFraction = maskPixels / (count * w * h);
 
   report({ phase: 'Done', frac: 1 });
   return {
@@ -183,6 +192,7 @@ export async function reconstruct(frameSet, opts, report) {
     subjects: { positions: Float32Array.from(subjPos), colors: Float32Array.from(subjCol), t: Float32Array.from(subjT), count: nSubj },
     center,
     extent,
+    maskFraction,
     near: NEAR,
     far: FAR,
     lastMask,
@@ -190,15 +200,18 @@ export async function reconstruct(frameSet, opts, report) {
   };
 }
 
-function maxDistance(pos, c) {
-  let m = 0;
+/** Distance from `c` that encloses a given fraction of the points; robust to stray outliers. */
+function percentileDistance(pos, c, q) {
   const n = pos.length / 3;
-  for (let i = 0; i < n; i++) {
+  if (!n) return 0;
+  const step = Math.max(1, Math.floor(n / 20000));
+  const d = [];
+  for (let i = 0; i < n; i += step) {
     const dx = pos[i * 3] - c[0], dy = pos[i * 3 + 1] - c[1], dz = pos[i * 3 + 2] - c[2];
-    const d = dx * dx + dy * dy + dz * dz;
-    if (d > m) m = d;
+    d.push(dx * dx + dy * dy + dz * dz);
   }
-  return Math.sqrt(m);
+  d.sort((a, b) => a - b);
+  return Math.sqrt(d[Math.min(d.length - 1, Math.floor(d.length * q))]);
 }
 
 function sceneCenter(pos) {

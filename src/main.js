@@ -1,5 +1,6 @@
 import { loadVideo, sampleVideo, makeDemoClip } from './frames.js';
 import { reconstruct, toPLY } from './reconstruct.js';
+import { stabilize } from './stabilize.js';
 import { loadAIDepth } from './depth.js';
 import { Viewer } from './viewer.js';
 
@@ -7,7 +8,7 @@ const $ = (id) => document.getElementById(id);
 const els = {
   file: $('file'), drop: $('drop'), dropText: $('dropText'), demoBtn: $('demoBtn'),
   frameCount: $('frameCount'), workWidth: $('workWidth'), depthMode: $('depthMode'), subjectDepth: $('subjectDepth'),
-  motionThr: $('motionThr'), minBlob: $('minBlob'), fov: $('fov'), far: $('far'), horizon: $('horizon'),
+  motionThr: $('motionThr'), minBlob: $('minBlob'), fov: $('fov'), far: $('far'), horizon: $('horizon'), stabilizeCam: $('stabilize'),
   runBtn: $('runBtn'), bar: $('bar'), status: $('status'),
   reveal: $('reveal'), trail: $('trail'), subjSize: $('subjSize'), bgSize: $('bgSize'), bgDim: $('bgDim'), extrude: $('extrude'),
   fps: $('fps'), orbitSpeed: $('orbitSpeed'), aspect: $('aspect'), autoOrbit: $('autoOrbit'), showFrustum: $('showFrustum'), showCaption: $('showCaption'),
@@ -100,7 +101,11 @@ els.runBtn.addEventListener('click', async () => {
       state.frameSet = await sampleVideo(state.video, { count, workWidth, onProgress: (f) => setProgress(0.15 + f * 0.2) });
     }
     const t0 = performance.now();
-    state.recon = await reconstruct(state.frameSet, opts, (p) => { setStatus(p.phase); setProgress(0.35 + p.frac * 0.65); });
+    if (els.stabilizeCam.checked) {
+      setStatus('Stabilizing camera motion…');
+      state.frameSet = await stabilize(state.frameSet, { onProgress: (f) => { setProgress(0.35 + f * 0.15); setStatus(`Stabilizing camera motion… ${Math.round(f * 100)}%`); } });
+    }
+    state.recon = await reconstruct(state.frameSet, opts, (p) => { setStatus(p.phase); setProgress(0.5 + p.frac * 0.5); });
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     showIntermediate(state.recon);
     viewer.load(state.recon, viewSettings());
@@ -109,8 +114,12 @@ els.runBtn.addEventListener('click', async () => {
     els.timeline.value = 0;
     els.frameLabel.textContent = `1 / ${state.recon.count}`;
     const subjPts = state.recon.subjects.count;
-    setStatus(`Done in ${secs} s. Scene: ${(state.recon.width * state.recon.height).toLocaleString()} points. Subjects: ${subjPts.toLocaleString()} points across ${state.recon.count} moments.` +
-      (subjPts === 0 ? '\nNo moving pixels found. Lower the motion threshold or min blob size.' : ''));
+    const bgPts = state.recon.background.positions.length / 3;
+    let note = '';
+    if (subjPts === 0) note = '\nNo moving pixels found. Lower the motion threshold or min blob size.';
+    else if (state.recon.maskFraction > 0.2 && !els.stabilizeCam.checked) note = '\nMore than a fifth of every frame counts as moving. The camera probably moves: enable "Stabilize camera" or raise the motion threshold.';
+    else if (state.recon.maskFraction > 0.2) note = '\nMuch of the frame still counts as moving. Raise the motion threshold, or the camera motion is beyond what stabilization can follow.';
+    setStatus(`Done in ${secs} s. Scene: ${bgPts.toLocaleString()} points. Subjects: ${subjPts.toLocaleString()} points across ${state.recon.count} moments.` + note);
     els.recordBtn.disabled = els.snapBtn.disabled = els.exportPlyBtn.disabled = false;
     viewer.playing = true;
     els.playBtn.textContent = '❚❚';
