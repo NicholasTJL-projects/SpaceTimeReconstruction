@@ -110,8 +110,11 @@ export function components(mask, w, h, minArea) {
  */
 export async function reconstruct(frameSet, opts, report) {
   const { width: w, height: h, frames, count } = frameSet;
-  const focal = (w / 2) / Math.tan((opts.fov * Math.PI) / 360);
-  const cx = w / 2, cy = h / 2;
+  // Intrinsics: FOV applies to the original frame; a stabilized mosaic keeps the same
+  // focal length (scaled with the canvas) and carries the first frame's principal point.
+  const srcW = frameSet.sourceWidth || w;
+  const focal = ((srcW / 2) / Math.tan((opts.fov * Math.PI) / 360)) * (frameSet.focalScale || 1);
+  const [cx, cy] = frameSet.principal || [w / 2, h / 2];
   const FAR = Math.max(NEAR * 1.5, opts.far || DEFAULT_FAR);
 
   report({ phase: 'Estimating still background (temporal median)', frac: 0.02 });
@@ -164,7 +167,9 @@ export async function reconstruct(frameSet, opts, report) {
       for (let k = 0; k < c.pixels.length; k++) {
         const p = c.pixels[k];
         const x = p % w, y = (p - x) / w;
-        const z = frameDisp ? disparityToDepth(frameDisp[p], NEAR, FAR) : zContact;
+        const z = frameDisp ? disparityToDepth(frameDisp[p], NEAR, FAR)
+          : opts.subjectDepth === 'surface' ? disparityToDepth(bgDisp[p], NEAR, FAR) - 0.02 * zContact
+          : zContact;
         const X = ((x + 0.5 - cx) / focal) * z, Y = (-(y + 0.5 - cy) / focal) * z, Z = -z;
         subjPos.push(X, Y, Z);
         subjCol.push(frame[p * 4] / 255, frame[p * 4 + 1] / 255, frame[p * 4 + 2] / 255);
@@ -187,7 +192,7 @@ export async function reconstruct(frameSet, opts, report) {
 
   report({ phase: 'Done', frac: 1 });
   return {
-    width: w, height: h, count, focal, fov: opts.fov,
+    width: w, height: h, count, focal, fov: opts.fov, principal: [cx, cy],
     background: { positions: bgPos, colors: bgCol, image: bg, disparity: bgDisp },
     subjects: { positions: Float32Array.from(subjPos), colors: Float32Array.from(subjCol), t: Float32Array.from(subjT), count: nSubj },
     center,

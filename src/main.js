@@ -47,7 +47,7 @@ for (const id of ['reveal', 'trail', 'subjSize', 'bgSize', 'bgDim', 'extrude', '
 }
 els.showCaption.addEventListener('input', () => (els.caption.style.display = els.showCaption.checked ? '' : 'none'));
 els.aspect.addEventListener('input', () => viewer.setAspect(els.aspect.value));
-els.depthMode.addEventListener('input', () => { els.subjectDepth.disabled = els.depthMode.value !== 'ai'; });
+els.depthMode.addEventListener('input', () => { if (els.depthMode.value !== 'ai' && els.subjectDepth.value === 'perframe') els.subjectDepth.value = 'contact'; });
 
 // --- video input
 function acceptFile(file) {

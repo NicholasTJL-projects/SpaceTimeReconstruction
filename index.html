@@ -57,8 +57,9 @@
           </label>
           <label>Subject depth
             <select id="subjectDepth">
-              <option value="contact">Ground contact (fast)</option>
-              <option value="perframe">Per-frame AI depth (slow)</option>
+              <option value="contact">Standing on the ground (upright silhouettes)</option>
+              <option value="surface">On the background surface (top-down shots)</option>
+              <option value="perframe">Per-frame AI depth (slow, needs AI depth)</option>
             </select>
           </label>
           <label>Motion threshold <output id="motionThrOut">28</output>

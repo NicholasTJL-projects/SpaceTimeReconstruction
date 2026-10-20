@@ -166,8 +166,11 @@ export class Viewer {
     this.frustum = new THREE.Group();
     const camDist = Math.hypot(...recon.center);
     const d = Math.min(recon.far * 0.5, Math.max(NEAR * 0.5, camDist * 0.35));
-    const hw = (recon.width / 2 / recon.focal) * d, hh = (recon.height / 2 / recon.focal) * d;
-    const c = [[-hw, hh, -d], [hw, hh, -d], [hw, -hh, -d], [-hw, -hh, -d]];
+    const [pcx, pcy] = recon.principal || [recon.width / 2, recon.height / 2];
+    const l = (-pcx / recon.focal) * d, r = ((recon.width - pcx) / recon.focal) * d;
+    const tp = (pcy / recon.focal) * d, bt = (-(recon.height - pcy) / recon.focal) * d;
+    const c = [[l, tp, -d], [r, tp, -d], [r, bt, -d], [l, bt, -d]];
+    const hw = (r - l) / 2, hh = (tp - bt) / 2;
     const pts = [];
     for (let i = 0; i < 4; i++) { pts.push(0, 0, 0, ...c[i]); pts.push(...c[i], ...c[(i + 1) % 4]); }
     const lGeo = new THREE.BufferGeometry();
@@ -180,7 +183,7 @@ export class Viewer {
     this.frameTex.colorSpace = THREE.SRGBColorSpace;
     const plane = new THREE.Mesh(new THREE.PlaneGeometry(hw * 2, hh * 2),
       new THREE.MeshBasicMaterial({ map: this.frameTex, side: THREE.DoubleSide, transparent: true, opacity: 0.92 }));
-    plane.position.set(0, 0, -d);
+    plane.position.set((l + r) / 2, (tp + bt) / 2, -d);
     this.frustum.add(plane);
     const dot = new THREE.Mesh(new THREE.SphereGeometry(0.03, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffffff }));
     this.frustum.add(dot);

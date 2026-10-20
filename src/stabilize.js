@@ -26,7 +26,7 @@ function downsample(src, w, h) {
   return out;
 }
 
-function pyramid(gray, w, h, minWidth = 48) {
+function pyramid(gray, w, h, minWidth = 32) {
   const levels = [{ g: gray, w, h }];
   while (levels[levels.length - 1].w >= minWidth * 2) {
     const l = levels[levels.length - 1];
@@ -51,7 +51,9 @@ function templateLevel(g, w, h) {
     const v = [s0, s1, s2, s3];
     for (let a = 0; a < 4; a++) for (let b = 0; b < 4; b++) H[a * 4 + b] += v[a] * v[b];
   }
-  return { g, w, h, cx, cy, sd, Hinv: invert4(H) };
+  const h22 = H[10] * H[15] - H[11] * H[14];
+  const Hinv2 = Math.abs(h22) > 1e-9 ? [H[15] / h22, -H[11] / h22, -H[14] / h22, H[10] / h22] : null;
+  return { g, w, h, cx, cy, sd, Hinv: invert4(H), Hinv2 };
 }
 
 function invert4(m) {
@@ -98,7 +100,7 @@ function sampleBilinear(g, w, h, x, y) {
 }
 
 /** Align image pyramid `img` to template pyramid `tpl`; returns transform in finest-level pixels. */
-function align(tplLevels, imgLevels, init, iters = 20) {
+function align(tplLevels, imgLevels, init, iters = 20, model = 'translation') {
   let m = scaleTranslation(init, 1 / 2 ** (tplLevels.length - 1));
   let overlap = 1;
   for (let L = tplLevels.length - 1; L >= 0; L--) {
@@ -118,15 +120,23 @@ function align(tplLevels, imgLevels, init, iters = 20) {
         const i = y * w + x;
         let e = v - tg[i];
         const ae = Math.abs(e);
+        if (ae > 4 * HUBER) continue; // a moving object, not camera motion
         const wgt = ae > HUBER ? HUBER / ae : 1;
         e *= wgt;
         b[0] += sd[i * 4] * e; b[1] += sd[i * 4 + 1] * e; b[2] += sd[i * 4 + 2] * e; b[3] += sd[i * 4 + 3] * e;
       }
       overlap = used / Math.max(1, total);
       if (used < 64) break;
-      const Hi = T.Hinv;
       const dp = [0, 0, 0, 0];
-      for (let r = 0; r < 4; r++) dp[r] = Hi[r * 4] * b[0] + Hi[r * 4 + 1] * b[1] + Hi[r * 4 + 2] * b[2] + Hi[r * 4 + 3] * b[3];
+      if (model === 'similarity') {
+        const Hi = T.Hinv;
+        for (let r = 0; r < 4; r++) dp[r] = Hi[r * 4] * b[0] + Hi[r * 4 + 1] * b[1] + Hi[r * 4 + 2] * b[2] + Hi[r * 4 + 3] * b[3];
+      } else {
+        const Hi = T.Hinv2;
+        if (!Hi) break;
+        dp[2] = Hi[0] * b[2] + Hi[1] * b[3];
+        dp[3] = Hi[2] * b[2] + Hi[3] * b[3];
+      }
       const ds = dp[0], dth = dp[1];
       const cs = Math.cos(dth), sn = Math.sin(dth), s = 1 + ds;
       const delta = { a: s * cs, b: -s * sn, c: s * sn, d: s * cs, tx: dp[2], ty: dp[3] };
@@ -138,58 +148,116 @@ function align(tplLevels, imgLevels, init, iters = 20) {
   return { m, overlap };
 }
 
-function warpRGBA(src, w, h, m) {
-  const out = new Uint8ClampedArray(w * h * 4);
-  const valid = new Uint8Array(w * h);
-  const cx = (w - 1) / 2, cy = (h - 1) / 2;
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const rx = x - cx, ry = y - cy;
-    const sx = m.a * rx + m.b * ry + m.tx + cx, sy = m.c * rx + m.d * ry + m.ty + cy;
-    const x0 = Math.floor(sx), y0 = Math.floor(sy);
-    if (x0 < 0 || y0 < 0 || x0 >= w - 1 || y0 >= h - 1) continue;
-    const fx = sx - x0, fy = sy - y0;
-    const i = (y0 * w + x0) * 4, o = (y * w + x) * 4;
-    for (let c = 0; c < 3; c++) {
-      out[o + c] = (src[i + c] * (1 - fx) + src[i + 4 + c] * fx) * (1 - fy) + (src[i + w * 4 + c] * (1 - fx) + src[i + w * 4 + 4 + c] * fx) * fy;
+/** Brute-force integer translation at the coarsest level: a robust starting point for fast pans. */
+function coarseTranslation(tplLevel, imgLevel) {
+  const { g: T, w, h } = tplLevel, I = imgLevel.g;
+  const R = Math.max(2, Math.round(0.3 * w));
+  let best = 0, bestScore = Infinity;
+  for (let dy = -Math.round(0.3 * h); dy <= Math.round(0.3 * h); dy++) for (let dx = -R; dx <= R; dx++) {
+    let sum = 0, n = 0;
+    for (let y = Math.max(0, -dy); y < Math.min(h, h - dy); y += 2) for (let x = Math.max(0, -dx); x < Math.min(w, w - dx); x += 2) {
+      sum += Math.abs(I[(y + dy) * w + x + dx] - T[y * w + x]); n++;
     }
-    out[o + 3] = 255;
-    valid[y * w + x] = 1;
+    if (n < 0.35 * (w * h) / 4) continue;
+    const score = sum / n;
+    if (score < bestScore) { bestScore = score; best = { dx, dy }; }
   }
-  return { rgba: out, valid };
+  return best || { dx: 0, dy: 0 };
+}
+
+function sane(m, prev = identity(), w) {
+  const rel = compose(m, inverse(prev));
+  const s = Math.hypot(rel.a, rel.c), th = Math.abs(Math.atan2(rel.c, rel.a));
+  return s > 0.8 && s < 1.25 && th < 0.18 && Math.abs(rel.tx) < 0.6 * w && Math.abs(rel.ty) < 0.6 * w;
 }
 
 /**
- * Stabilize a FrameSet. Returns a new FrameSet in the first frame's
- * coordinates with `valid` masks and the per-frame transforms.
+ * Stabilize a FrameSet. Every frame is aligned to the first and resampled
+ * onto a mosaic canvas large enough to hold the whole pan (bounded to about
+ * 2.5x the frame area; the canvas is downscaled beyond that and `focalScale`
+ * reports the factor). The result carries `valid` masks, the per-frame
+ * transforms and the principal point of the first frame inside the canvas.
  */
-export async function stabilize(frameSet, { onProgress } = {}) {
+export async function stabilize(frameSet, { onProgress, maxAreaScale = 2.5, model = 'translation' } = {}) {
   const { width: w, height: h, frames, count } = frameSet;
   const grays = frames.map((f) => toGray(f, w, h));
   const pyrs = grays.map((g) => pyramid(g, w, h));
   const tplOf = (pyr) => pyr.map((l) => templateLevel(l.g, l.w, l.h));
   const tpl0 = tplOf(pyrs[0]);
   const transforms = [identity()];
-  const outFrames = [frames[0]];
-  const valids = [new Uint8Array(w * h).fill(1)];
-  let prevTpl = tpl0;
-  let toPrev = identity();
+  // Align against a keyframe rather than the previous frame, so drift only
+  // accumulates when the view has moved far enough to need a new keyframe.
+  let key = { tpl: tpl0, global: identity(), toKey: identity() };
+  const L = tpl0.length - 1;
+  const alignTo = (k, i, initRel) => {
+    const t = coarseTranslation(k.tpl[L], pyrs[i][L]);
+    const init = { ...initRel, tx: initRel.tx + 0, ty: initRel.ty + 0 };
+    const fromSearch = { ...identity(), tx: t.dx * 2 ** L, ty: t.dy * 2 ** L };
+    const a = align(k.tpl, pyrs[i], fromSearch, 20, model);
+    const b = Math.abs(init.tx - fromSearch.tx) + Math.abs(init.ty - fromSearch.ty) > 2 ** L ? align(k.tpl, pyrs[i], init, 20, model) : null;
+    // Prefer the candidate with more overlap once both are sane.
+    let best = a;
+    if (b && (!sane(a.m, identity(), w) || (sane(b.m, identity(), w) && b.overlap > a.overlap))) best = b;
+    if (!sane(best.m, identity(), w)) best = { m: fromSearch, overlap: 0 };
+    return best;
+  };
   for (let i = 1; i < count; i++) {
-    // Step 1: align to the previous frame (small motion), chained onto its global transform.
-    const step = align(prevTpl, pyrs[i], toPrev);
-    toPrev = step.m;
-    let global = compose(step.m, transforms[i - 1]);
-    // Step 2: when enough of the first frame is still in view, refine directly against it to kill drift.
-    const refined = align(tpl0, pyrs[i], global, 12);
-    if (refined.overlap > 0.5) global = refined.m;
+    let res = alignTo(key, i, key.toKey);
+    if (res.overlap < 0.55) {
+      // View has moved on: promote the previous frame to keyframe and align to it instead.
+      key = { tpl: tplOf(pyrs[i - 1]), global: transforms[i - 1], toKey: identity() };
+      res = alignTo(key, i, identity());
+    }
+    key.toKey = res.m;
+    const global = compose(res.m, key.global);
     transforms.push(global);
-    const { rgba, valid } = warpRGBA(frames[i], w, h, global);
-    outFrames.push(rgba);
-    valids.push(valid);
-    prevTpl = tplOf(pyrs[i]);
     if (i % 3 === 0) {
-      onProgress?.(i / (count - 1));
+      onProgress?.((0.7 * i) / (count - 1));
       await new Promise((r) => setTimeout(r, 0));
     }
   }
-  return { ...frameSet, frames: outFrames, valid: valids, transforms, stabilized: true };
+
+  // Mosaic canvas: bounding box, in first-frame centered coordinates, of every warped frame.
+  const cx = (w - 1) / 2, cy = (h - 1) / 2;
+  let minX = -cx, maxX = cx, minY = -cy, maxY = cy;
+  for (const m of transforms) {
+    const inv = inverse(m);
+    for (const [px, py] of [[-cx, -cy], [cx, -cy], [cx, cy], [-cx, cy]]) {
+      const x = inv.a * px + inv.b * py + inv.tx, y = inv.c * px + inv.d * py + inv.ty;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+  }
+  // Never let a runaway transform explode the canvas: clamp to 3x the frame in each direction.
+  minX = Math.max(minX, -cx - w); maxX = Math.min(maxX, cx + w); minY = Math.max(minY, -cy - h); maxY = Math.min(maxY, cy + h);
+  const fullW = maxX - minX + 1, fullH = maxY - minY + 1;
+  const k = Math.min(1, Math.sqrt((maxAreaScale * w * h) / (fullW * fullH)));
+  const W = Math.max(2, Math.round(fullW * k)) & ~1, H = Math.max(2, Math.round(fullH * k)) & ~1;
+  const principal = [(-minX) * k, (-minY) * k];
+
+  const outFrames = [], valids = [];
+  for (let i = 0; i < count; i++) {
+    const m = transforms[i];
+    const rgba = new Uint8ClampedArray(W * H * 4), valid = new Uint8Array(W * H);
+    const src = frames[i];
+    for (let v = 0; v < H; v++) for (let u = 0; u < W; u++) {
+      const x = u / k + minX, y = v / k + minY; // first-frame centered coords
+      const sx = m.a * x + m.b * y + m.tx + cx, sy = m.c * x + m.d * y + m.ty + cy;
+      const x0 = Math.floor(sx), y0 = Math.floor(sy);
+      if (x0 < 0 || y0 < 0 || x0 >= w - 1 || y0 >= h - 1) continue;
+      const fx = sx - x0, fy = sy - y0;
+      const s0 = (y0 * w + x0) * 4, o = (v * W + u) * 4;
+      for (let c = 0; c < 3; c++) {
+        rgba[o + c] = (src[s0 + c] * (1 - fx) + src[s0 + 4 + c] * fx) * (1 - fy) + (src[s0 + w * 4 + c] * (1 - fx) + src[s0 + w * 4 + 4 + c] * fx) * fy;
+      }
+      rgba[o + 3] = 255;
+      valid[v * W + u] = 1;
+    }
+    outFrames.push(rgba);
+    valids.push(valid);
+    if (i % 6 === 0) {
+      onProgress?.(0.7 + (0.3 * i) / count);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+  return { ...frameSet, width: W, height: H, frames: outFrames, valid: valids, transforms, principal, focalScale: k, stabilized: true };
 }

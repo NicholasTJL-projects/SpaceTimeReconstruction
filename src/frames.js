@@ -60,7 +60,7 @@ export async function sampleVideo(video, { count, workWidth, onProgress }) {
     onProgress?.((i + 1) / count);
   }
   const sourceFps = count > 1 ? (count - 1) / (times[count - 1] - times[0]) : 1;
-  return { width: w, height: h, count, frames, times, sourceFps };
+  return { width: w, height: h, sourceWidth: w, count, frames, times, sourceFps };
 }
 
 function seek(video, t) {
@@ -138,7 +138,7 @@ export function makeDemoClip({ count = 72, workWidth = 320 } = {}) {
     frames.push(ctx.getImageData(0, 0, w, h).data.slice());
     times.push(i / 12);
   }
-  return { width: w, height: h, count, frames, times, sourceFps: 12 };
+  return { width: w, height: h, sourceWidth: w, count, frames, times, sourceFps: 12 };
 }
 
 function drawDeer(ctx, x, footY, s, i) {
