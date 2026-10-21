@@ -60,6 +60,15 @@ Or open the GitHub Pages deployment once the `Deploy to GitHub Pages` workflow h
 
 Dependencies load from CDNs through an import map: Three.js 0.170 and Transformers.js 3.3.3. The model comes from the Hugging Face hub.
 
+## Example footage
+
+Two free clips from Mixkit (Mixkit License, free for commercial and personal use) were used to test the pipeline on real drifting:
+
+- [Red toy car spinning around a race track](https://mixkit.co/free-stock-video/red-toy-car-spinning-around-a-race-track-45166/): fixed ground-level camera. Defaults work; subject depth "standing on the ground".
+- [A drifting car in the countryside](https://mixkit.co/free-stock-video/a-drifting-car-in-the-countryside-46422/): static top-down drone. Use subject depth "on the background surface", motion threshold about 70, min blob about 80 to drop most of the dust, and a depth range of 3 so the flat ground is not stretched into a ramp.
+
+Footage that follows the car with a wide pan and tilt (most handheld drift videos) changes the viewpoint too much for a single reconstruction; stabilization handles pans of up to a frame width or two, not a camera that tracks the subject across a large scene.
+
 ## Testing
 
 - Click **Use a synthetic demo clip** and reconstruct. The ground-plane mode finishes in about a second; AI depth adds the one-time model download.
